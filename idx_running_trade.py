@@ -20,6 +20,8 @@ import numpy as np
 import ta
 import requests
 from datetime import datetime
+import pytz
+WIB = pytz.timezone("Asia/Jakarta")
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -284,7 +286,7 @@ def color_change(val):
 
 # ── TELEGRAM FORMATTER ────────────────────────────────────────────────────────
 def build_telegram_message(df_top10: pd.DataFrame) -> str:
-    now   = datetime.now()
+    now = datetime.now(WIB)
     ts    = now.strftime("%d %b %Y  %H:%M WIB")
     day   = now.strftime("%A")
 
@@ -477,7 +479,7 @@ def run_live_scan(pool: list):
 
     for i, code in enumerate(pool):
         prog_ph.progress((i + 1) / total)
-        ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        ts = datetime.now(WIB).strftime("%H:%M:%S.%f")[:-3]
 
         log_lines.append(
             f'<span class="log-scan">[{ts}]</span> → scanning <b>{code}.JK</b>...'
@@ -521,7 +523,7 @@ def run_live_scan(pool: list):
                 use_container_width=True, height=260
             )
 
-    done_ts = datetime.now().strftime("%H:%M:%S")
+    done_ts = datetime.now(WIB).strftime("%H:%M:%S")
     prog_ph.progress(1.0)
     status_ph.markdown(
         f"<div style='color:#00ff88;font-size:13px;font-family:JetBrains Mono'>"
@@ -609,7 +611,7 @@ first_run = "df_result" not in st.session_state
 if first_run or rescan_btn or st.session_state.get("pool_key") != pool_key:
     st.session_state.pool_key  = pool_key
     st.session_state.df_result = run_live_scan(selected_pool)
-    st.session_state.scan_time = datetime.now().strftime("%H:%M:%S")
+    st.session_state.scan_time = datetime.now(WIB).strftime("%H:%M:%S")
 
     # Auto notify after scan
     if auto_notify and tele_token and tele_chat_id:
@@ -725,7 +727,7 @@ with col_prev:
         <div class="tele-header">
           <span>🤖</span>
           <span style='color:#00d4ff;font-weight:700'>IDX Running Trade Bot</span>
-          <span style='margin-left:auto;font-size:10px'>{datetime.now().strftime("%H:%M")}</span>
+          <span style='margin-left:auto;font-size:10px'>{datetime.now(WIB).strftime("%H:%M")}</span>
         </div>
         <div class="tele-preview">{tele_msg.replace("*","").replace("`","").replace("_","")}</div>
         """, unsafe_allow_html=True)
