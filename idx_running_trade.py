@@ -1,11 +1,16 @@
 """
 ╔══════════════════════════════════════════════════════════╗
-║         IDX RUNNING TRADE SCANNER  v2.0                  ║
-║         Auto-scan on open | Live progress per ticker     ║
+║         IDX RUNNING TRADE SCANNER  v3.0                  ║
+║         Auto-scan | Live Log | Telegram Notify TOP 10    ║
 ╚══════════════════════════════════════════════════════════╝
 Usage:
-    pip install streamlit yfinance pandas numpy ta
-    streamlit run idx_running_trade.py
+    pip install streamlit yfinance pandas numpy ta requests
+    streamlit run idx_running_trade_v3.py
+
+Telegram Setup:
+    1. Chat @BotFather → /newbot → copy token
+    2. Chat @userinfobot → copy chat_id
+    3. Masukkan di sidebar app
 """
 
 import streamlit as st
@@ -13,13 +18,14 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import ta
+import requests
 from datetime import datetime
 import warnings
 warnings.filterwarnings("ignore")
 
 # ── PAGE CONFIG ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="IDX Running Trade Scanner",
+    page_title="IDX Running Trade Scanner v3",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -81,6 +87,30 @@ st.markdown("""
   .log-skip { color: #304050; }
   .log-scan { color: #00aaff; }
 
+  .tele-preview {
+    background: #17212b;
+    border: 1px solid #2a3f55;
+    border-radius: 12px;
+    padding: 16px 20px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: #d0d0d0;
+    line-height: 1.9;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .tele-header {
+    background: #0d1a26;
+    border: 1px solid #1e3a5f;
+    border-radius: 8px 8px 0 0;
+    padding: 10px 16px;
+    font-size: 11px;
+    color: #607080;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
   .stButton > button {
     background: linear-gradient(135deg, #0d2a45, #091a2e);
     color: #00d4ff;
@@ -97,6 +127,16 @@ st.markdown("""
     border-color: #00d4ff;
     color: #fff;
   }
+  .btn-tele > button {
+    background: linear-gradient(135deg, #0a2a1a, #052010) !important;
+    color: #00cc66 !important;
+    border: 1px solid #00aa44 !important;
+  }
+  .btn-tele > button:hover {
+    background: linear-gradient(135deg, #0d3a22, #072a14) !important;
+    border-color: #00ff88 !important;
+    color: #00ff88 !important;
+  }
 
   hr { border-color: #1e3a5f !important; }
   .up   { color: #00ff88; font-weight: 700; }
@@ -105,6 +145,14 @@ st.markdown("""
 
   .stProgress > div > div > div > div {
     background: linear-gradient(90deg, #ff6600, #ff9900) !important;
+  }
+
+  .stTextInput > div > div > input,
+  .stTextInput > div > div > input:focus {
+    background: #0d1a26 !important;
+    border: 1px solid #1e3a5f !important;
+    color: #e0e0e0 !important;
+    font-family: 'JetBrains Mono', monospace;
   }
 </style>
 """, unsafe_allow_html=True)
@@ -216,7 +264,7 @@ IDX_UNIVERSE = {
     "WICO", "WIDI", "WIFI", "WIIM", "WIKA", "WINE", "WINR", "WINS", "WIRG", "WITA", 
     "WMPP", "WMUU", "WOMF", "WONS", "WOOD", "WOWS", "WPOW", "WSBP", "WSKT", "WTON", 
     "YELO", "YOII", "YPAS", "YULE", "YUPI", "ZATA", "ZBRA", "ZENI", "ZINC", "ZONE", 
-    "ZYRX", "KRYA"
+    "ZYRX", "KRYA",
     ],
     "High Volatility": [
         "BRIS", "ADMR", "MBMA", "CUAN", "AMMN", "SBMA", "SRTG",
@@ -234,6 +282,103 @@ def color_change(val):
     elif val < 0: return f'<span class="down">▼ {abs(val):.2f}%</span>'
     return f'<span class="neu">  {val:.2f}%</span>'
 
+# ── TELEGRAM FORMATTER ────────────────────────────────────────────────────────
+def build_telegram_message(df_top10: pd.DataFrame) -> str:
+    now   = datetime.now()
+    ts    = now.strftime("%d %b %Y  %H:%M WIB")
+    day   = now.strftime("%A")
+
+    # Header
+    lines = [
+        "⚡ *IDX RUNNING TRADE SCANNER*",
+        f"📅 `{day}, {ts}`",
+        "━━━━━━━━━━━━━━━━━━━━━━━",
+        "🏆 *TOP 10 CANDIDATES*",
+        "",
+    ]
+
+    signal_emoji = {
+        "STRONG": "🔥",
+        "BUY":    "⚡",
+        "WATCH":  "👀",
+        "SKIP":   "❄",
+    }
+
+    for i, row in df_top10.reset_index(drop=True).iterrows():
+        rank    = i + 1
+        ticker  = row["Ticker"]
+        price   = row["Price"]
+        chg1d   = row["Chg 1D %"]
+        vol     = row["Vol Ratio"]
+        rsi     = row["RSI"]
+        score   = row["Score"]
+        signal  = row["Signal"]
+        macd    = row["MACD ✓"]
+        ema20   = row["EMA20 ✓"]
+        ema50   = row["EMA50 ✓"]
+        bb      = row["BB%"]
+        chg3d   = row["Chg 3D %"]
+
+        # Determine emoji
+        if "STRONG" in signal:   sig_icon = "🔥"
+        elif "BUY" in signal:    sig_icon = "⚡"
+        elif "WATCH" in signal:  sig_icon = "👀"
+        else:                     sig_icon = "❄"
+
+        # Change arrow
+        chg_arrow = "▲" if chg1d >= 0 else "▼"
+        chg_str   = f"{chg_arrow}{abs(chg1d):.2f}%"
+
+        # Score bar (visual)
+        filled = int(score / 10)
+        bar    = "█" * filled + "░" * (10 - filled)
+
+        # RSI zone label
+        if rsi < 30:        rsi_zone = "oversold"
+        elif rsi <= 50:     rsi_zone = "recovery"
+        elif rsi <= 65:     rsi_zone = "running ✅"
+        elif rsi <= 70:     rsi_zone = "hot zone"
+        else:               rsi_zone = "overbought ⚠️"
+
+        lines += [
+            f"{'━'*23}",
+            f"{sig_icon} *#{rank} {ticker}.JK*   {signal}",
+            f"💰 `Rp {price:,.0f}`   {chg_str} (1D)  |  3D: {chg3d:+.2f}%",
+            f"📊 Score: `{score:.0f}/100`  [{bar}]",
+            f"📈 Vol Ratio : `{vol:.2f}x`",
+            f"📉 RSI       : `{rsi:.1f}` — {rsi_zone}",
+            f"🔀 MACD      : {macd}   EMA20: {ema20}   EMA50: {ema50}",
+            f"📐 BB%       : `{bb:.2f}` {'✅' if bb < 0.8 else '⚠️ near top'}",
+            "",
+        ]
+
+    # Footer
+    lines += [
+        "━━━━━━━━━━━━━━━━━━━━━━━",
+        "⚠️ _Bukan financial advice_",
+        "🤖 _IDX Running Trade Scanner v3.0_",
+    ]
+
+    return "\n".join(lines)
+
+# ── SEND TELEGRAM ─────────────────────────────────────────────────────────────
+def send_telegram(token: str, chat_id: str, message: str) -> tuple[bool, str]:
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {
+        "chat_id":    chat_id,
+        "text":       message,
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": True,
+    }
+    try:
+        r = requests.post(url, json=payload, timeout=10)
+        if r.status_code == 200:
+            return True, "✅ Pesan berhasil dikirim ke Telegram!"
+        else:
+            return False, f"❌ Error {r.status_code}: {r.json().get('description', 'Unknown error')}"
+    except Exception as e:
+        return False, f"❌ Exception: {str(e)}"
+
 # ── SCORE ONE TICKER ──────────────────────────────────────────────────────────
 def score_ticker(code: str):
     try:
@@ -250,8 +395,7 @@ def score_ticker(code: str):
         chg_5d = (close.iloc[-1] / close.iloc[-6] - 1) * 100
 
         vol_avg20 = volume.iloc[-21:-1].mean()
-        vol_today = volume.iloc[-1]
-        vol_ratio = float(vol_today / vol_avg20) if vol_avg20 > 0 else 1.0
+        vol_ratio = float(volume.iloc[-1] / vol_avg20) if vol_avg20 > 0 else 1.0
 
         rsi = float(ta.momentum.RSIIndicator(close, 14).rsi().iloc[-1])
 
@@ -264,8 +408,8 @@ def score_ticker(code: str):
         bb     = ta.volatility.BollingerBands(close, 20, 2)
         bb_pct = float(bb.bollinger_pband().iloc[-1])
 
-        ema20 = float(ta.trend.EMAIndicator(close, 20).ema_indicator().iloc[-1])
-        ema50 = float(ta.trend.EMAIndicator(close, 50).ema_indicator().iloc[-1])
+        ema20      = float(ta.trend.EMAIndicator(close, 20).ema_indicator().iloc[-1])
+        ema50      = float(ta.trend.EMAIndicator(close, 50).ema_indicator().iloc[-1])
         price_last = float(close.iloc[-1])
         above_ema20 = price_last > ema20
         above_ema50 = price_last > ema50
@@ -275,20 +419,19 @@ def score_ticker(code: str):
         ).average_true_range().iloc[-1])
         atr_pct = (atr / price_last) * 100
 
-        # ── Scoring ───────────────────────────────
         score = 0.0
         score += min(float(chg_1d) * 5, 20) if chg_1d > 0 else 0
         score += min(float(chg_3d) * 2, 10) if chg_3d > 0 else 0
         score += min(float(chg_5d) * 1,  5) if chg_5d > 0 else 0
         score += min((vol_ratio - 1) * 10, 25) if vol_ratio > 1 else 0
-        if 40 <= rsi <= 65:    score += 15
-        elif 65 < rsi <= 70:   score += 8
-        elif 30 <= rsi < 40:   score += 5
-        if macd_cross:         score += 10
-        if macd_hist > 0:      score += 5
-        if above_ema20:        score += 5
-        if above_ema50:        score += 5
-        if bb_pct < 0.8:       score += 5
+        if 40 <= rsi <= 65:   score += 15
+        elif 65 < rsi <= 70:  score += 8
+        elif 30 <= rsi < 40:  score += 5
+        if macd_cross:        score += 10
+        if macd_hist > 0:     score += 5
+        if above_ema20:       score += 5
+        if above_ema50:       score += 5
+        if bb_pct < 0.8:      score += 5
         score = min(score, 100)
 
         if score >= 70 and vol_ratio >= 2.0: signal = "🔥 STRONG BUY"
@@ -317,8 +460,8 @@ def score_ticker(code: str):
 
 # ── LIVE SCAN ─────────────────────────────────────────────────────────────────
 def run_live_scan(pool: list):
-    total   = len(pool)
-    results = []
+    total     = len(pool)
+    results   = []
     log_lines = []
 
     status_ph   = st.empty()
@@ -333,10 +476,9 @@ def run_live_scan(pool: list):
     )
 
     for i, code in enumerate(pool):
-        pct = (i + 1) / total
-        prog_ph.progress(pct)
-
+        prog_ph.progress((i + 1) / total)
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+
         log_lines.append(
             f'<span class="log-scan">[{ts}]</span> → scanning <b>{code}.JK</b>...'
         )
@@ -348,25 +490,14 @@ def run_live_scan(pool: list):
         result = score_ticker(code)
 
         if result:
-            s   = result["Score"]
-            sig = result["Signal"]
-            chg = result["Chg 1D %"]
-            vr  = result["Vol Ratio"]
-
-            if "STRONG" in sig:
-                cls, icon = "log-hot", "🔥"
-            elif "BUY" in sig:
-                cls, icon = "log-buy", "⚡"
-            elif "WATCH" in sig:
-                cls, icon = "log-ok", "👀"
-            else:
-                cls, icon = "log-skip", "❄"
-
+            s, sig = result["Score"], result["Signal"]
+            chg, vr = result["Chg 1D %"], result["Vol Ratio"]
+            cls  = "log-hot" if "STRONG" in sig else "log-buy" if "BUY" in sig else "log-ok" if "WATCH" in sig else "log-skip"
+            icon = "🔥" if "STRONG" in sig else "⚡" if "BUY" in sig else "👀" if "WATCH" in sig else "❄"
             log_lines[-1] = (
                 f'<span class="log-scan">[{ts}]</span> '
                 f'<span class="{cls}">{icon} {code} &nbsp;|&nbsp; '
-                f'Score:{s:.0f} &nbsp;|&nbsp; '
-                f'Chg:{chg:+.2f}% &nbsp;|&nbsp; '
+                f'Score:{s:.0f} &nbsp;|&nbsp; Chg:{chg:+.2f}% &nbsp;|&nbsp; '
                 f'Vol:{vr:.1f}x &nbsp;|&nbsp; {sig}</span>'
             )
             results.append(result)
@@ -381,26 +512,22 @@ def run_live_scan(pool: list):
             unsafe_allow_html=True
         )
 
-        # Live table setiap 5 ticker
         if results and (i % 5 == 0 or i == total - 1):
             df_live = pd.DataFrame(results).sort_values("Score", ascending=False)
             df_live.index = range(1, len(df_live) + 1)
             live_tbl_ph.dataframe(
-                df_live[["Ticker", "Price", "Chg 1D %",
-                          "Vol Ratio", "RSI", "MACD ✓", "Score", "Signal"]],
-                use_container_width=True, height=280
+                df_live[["Ticker", "Price", "Chg 1D %", "Vol Ratio",
+                          "RSI", "MACD ✓", "Score", "Signal"]],
+                use_container_width=True, height=260
             )
 
-    # Done
     done_ts = datetime.now().strftime("%H:%M:%S")
     prog_ph.progress(1.0)
     status_ph.markdown(
         f"<div style='color:#00ff88;font-size:13px;font-family:JetBrains Mono'>"
-        f"✅ SCAN SELESAI [{done_ts}] — "
-        f"{len(results)}/{total} saham berhasil diproses</div>",
+        f"✅ SCAN SELESAI [{done_ts}] — {len(results)}/{total} saham berhasil</div>",
         unsafe_allow_html=True
     )
-
     live_tbl_ph.empty()
     log_ph.empty()
 
@@ -422,7 +549,6 @@ with st.sidebar:
         options=list(IDX_UNIVERSE.keys()),
         default=list(IDX_UNIVERSE.keys())[:2],
     )
-
     selected_pool = sorted(set(
         t for grp in universe_choice for t in IDX_UNIVERSE.get(grp, [])
     )) if universe_choice else ALL_STOCKS
@@ -435,9 +561,26 @@ with st.sidebar:
     st.markdown(f"**{len(selected_pool)} saham** dalam queue")
     st.markdown("---")
 
-    min_score     = st.slider("Min Score",        0,   100,  40, 5)
+    min_score     = st.slider("Min Score",        0,   100, 40, 5)
     min_vol_ratio = st.slider("Min Volume Ratio", 1.0, 10.0, 1.5, 0.5)
-    max_rsi       = st.slider("Max RSI",          50,  85,   72, 1)
+    max_rsi       = st.slider("Max RSI",          50,  85,  72, 1)
+
+    st.markdown("---")
+
+    # ── Telegram Config ───────────────────────────────────────────────────────
+    st.markdown("### 📲 TELEGRAM CONFIG")
+    tele_token   = st.secrets.get("TELEGRAM_TOKEN", "")
+    tele_chat_id = st.secrets.get("TELEGRAM_CHAT_ID", "")
+    auto_notify  = st.checkbox("Auto kirim setelah scan", value=False)
+
+    st.markdown("""
+    <div style='font-size:10px;color:#405060;line-height:1.8;margin-top:4px'>
+    💡 Cara dapat token:<br>
+    &nbsp;&nbsp;→ Chat <b>@BotFather</b> → /newbot<br>
+    💡 Cara dapat chat_id:<br>
+    &nbsp;&nbsp;→ Chat <b>@userinfobot</b>
+    </div>
+    """, unsafe_allow_html=True)
 
     st.markdown("---")
     rescan_btn = st.button("🔄 RE-SCAN", use_container_width=True)
@@ -454,12 +597,12 @@ with st.sidebar:
 # ── HEADER ────────────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="scanner-header">
-  <div class="scanner-title">⚡ IDX RUNNING TRADE SCANNER</div>
-  <div class="scanner-sub">Auto-scan on startup · Live log per ticker · Momentum · Volume · RSI · MACD · EMA</div>
+  <div class="scanner-title">⚡ IDX RUNNING TRADE SCANNER v3</div>
+  <div class="scanner-sub">Auto-scan on startup · Live log · Momentum · Volume · RSI · MACD · EMA · Telegram Notify</div>
 </div>
 """, unsafe_allow_html=True)
 
-# ── AUTO-SCAN ON STARTUP ──────────────────────────────────────────────────────
+# ── AUTO-SCAN ─────────────────────────────────────────────────────────────────
 pool_key  = ",".join(selected_pool)
 first_run = "df_result" not in st.session_state
 
@@ -468,10 +611,18 @@ if first_run or rescan_btn or st.session_state.get("pool_key") != pool_key:
     st.session_state.df_result = run_live_scan(selected_pool)
     st.session_state.scan_time = datetime.now().strftime("%H:%M:%S")
 
+    # Auto notify after scan
+    if auto_notify and tele_token and tele_chat_id:
+        df_top = st.session_state.df_result.head(10)
+        if not df_top.empty:
+            msg = build_telegram_message(df_top)
+            ok, info = send_telegram(tele_token, tele_chat_id, msg)
+            st.session_state.tele_status = info
+
 df = st.session_state.df_result
 
 if df is None or df.empty:
-    st.warning("Tidak ada data. Cek koneksi internet atau kurangi filter.")
+    st.warning("Tidak ada data. Cek koneksi atau kurangi filter.")
     st.stop()
 
 # ── FILTER ────────────────────────────────────────────────────────────────────
@@ -508,7 +659,7 @@ st.markdown("### 🏆 TOP RUNNING TRADE CANDIDATES")
 
 col_l, col_r = st.columns([3, 1])
 with col_l:
-    top_n = st.selectbox("Tampilkan top", [10, 20, 30, 50], index=1)
+    top_n = st.selectbox("Tampilkan top", [10, 20, 30, 50], index=0)
 with col_r:
     sig_filter = st.selectbox("Filter signal", ["Semua", "🔥 STRONG BUY", "⚡ BUY", "👀 WATCH"])
 
@@ -533,15 +684,15 @@ else:
         return ""
     def c_vol(v):
         if isinstance(v, (int, float)):
-            if v >= 3.0:  return "color:#ff4444;font-weight:bold"
+            if v >= 3.0:   return "color:#ff4444;font-weight:bold"
             elif v >= 2.0: return "color:#ff9900;font-weight:bold"
         return ""
 
     styled = (
         df_show.style
-        .map(c_chg,   subset=["Chg 1D %", "Chg 3D %", "Chg 5D %"])
-        .map(c_score, subset=["Score"])
-        .map(c_vol,   subset=["Vol Ratio"])
+        .applymap(c_chg,   subset=["Chg 1D %", "Chg 3D %", "Chg 5D %"])
+        .applymap(c_score, subset=["Score"])
+        .applymap(c_vol,   subset=["Vol Ratio"])
         .format({
             "Price":     "{:,.0f}",
             "Chg 1D %":  "{:+.2f}%",
@@ -554,28 +705,88 @@ else:
             "Score":     "{:.1f}",
         })
     )
-    st.dataframe(styled, use_container_width=True, height=480)
+    st.dataframe(styled, use_container_width=True, height=420)
+
+st.markdown("---")
+
+# ── TELEGRAM SECTION ──────────────────────────────────────────────────────────
+st.markdown("### 📲 TELEGRAM NOTIFICATION")
+
+df_top10  = df_filtered.head(10).copy()
+tele_msg  = build_telegram_message(df_top10) if not df_top10.empty else ""
+
+col_prev, col_send = st.columns([3, 1])
+
+with col_prev:
+    st.markdown("**📋 Preview Pesan Telegram (Top 10)**")
+    if tele_msg:
+        # Render preview styled like Telegram dark
+        st.markdown(f"""
+        <div class="tele-header">
+          <span>🤖</span>
+          <span style='color:#00d4ff;font-weight:700'>IDX Running Trade Bot</span>
+          <span style='margin-left:auto;font-size:10px'>{datetime.now().strftime("%H:%M")}</span>
+        </div>
+        <div class="tele-preview">{tele_msg.replace("*","").replace("`","").replace("_","")}</div>
+        """, unsafe_allow_html=True)
+    else:
+        st.info("Tidak ada kandidat untuk dikirim.")
+
+with col_send:
+    st.markdown("**📤 Kirim Sekarang**")
+
+    if "tele_status" in st.session_state:
+        st.markdown(f"""
+        <div style='font-size:12px;padding:8px;background:#0d1a26;border:1px solid #1e3a5f;border-radius:4px;margin-bottom:8px'>
+        {st.session_state.tele_status}
+        </div>""", unsafe_allow_html=True)
+
+    tele_ok = bool(tele_token and tele_chat_id)
+
+    if not tele_ok:
+        st.markdown("""
+        <div style='font-size:11px;color:#607080;padding:8px;background:#0d1a26;
+                    border:1px solid #1e3a5f;border-radius:4px'>
+        ⚠️ Isi Bot Token &<br>Chat ID di sidebar<br>untuk aktifkan notif
+        </div>""", unsafe_allow_html=True)
+
+    st.markdown('<div class="btn-tele">', unsafe_allow_html=True)
+    send_btn = st.button(
+        "📲 KIRIM KE TELEGRAM",
+        disabled=not tele_ok or df_top10.empty,
+        use_container_width=True
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    if send_btn and tele_ok and not df_top10.empty:
+        with st.spinner("Mengirim..."):
+            ok, info = send_telegram(tele_token, tele_chat_id, tele_msg)
+            st.session_state.tele_status = info
+            st.rerun()
+
+    # Copy raw message
+    if tele_msg:
+        with st.expander("📋 Raw text"):
+            st.code(tele_msg, language="markdown")
 
 # ── DETAIL VIEW ───────────────────────────────────────────────────────────────
 if not df_show.empty:
     st.markdown("---")
     st.markdown("### 🔬 DETAIL TICKER")
-    detail_ticker = st.selectbox("Pilih saham untuk detail", df_show["Ticker"].tolist())
+    detail_ticker = st.selectbox("Pilih saham", df_show["Ticker"].tolist())
 
     if detail_ticker:
         row = df_show[df_show["Ticker"] == detail_ticker].iloc[0]
         col1, col2 = st.columns([1, 2])
+        score_color = "#ff4444" if row["Score"] >= 70 else "#ff9900" if row["Score"] >= 45 else "#00aaff"
 
         with col1:
-            score_color = "#ff4444" if row["Score"] >= 70 else "#ff9900" if row["Score"] >= 45 else "#00aaff"
             st.markdown(f"""
             <div class="metric-card">
               <div style='font-size:22px;font-weight:700;color:#ff6600'>{row['Ticker']}.JK</div>
               <div style='font-size:26px;font-weight:700;color:#00d4ff'>Rp {row['Price']:,.0f}</div>
               <div style='margin-top:10px;font-size:15px'>{row['Signal']}</div>
-              <div style='margin-top:6px;font-size:22px;font-weight:700;color:{score_color}'>
-                Score: {row['Score']:.1f}
-              </div>
+              <div style='margin-top:6px;font-size:22px;font-weight:700;color:{score_color}'>Score: {row['Score']:.1f}</div>
             </div>
             <div class="metric-card" style='margin-top:8px'>
               <div class="metric-label">RSI (14)</div>
@@ -603,7 +814,7 @@ if not df_show.empty:
                 <tr><td style='color:#607080;padding:3px 0'>MACD Bullish</td><td>{row['MACD ✓']}</td></tr>
                 <tr><td style='color:#607080;padding:3px 0'>Above EMA20</td><td>{row['EMA20 ✓']}</td></tr>
                 <tr><td style='color:#607080;padding:3px 0'>Above EMA50</td><td>{row['EMA50 ✓']}</td></tr>
-                <tr><td style='color:#607080;padding:3px 0'>Bollinger %</td><td style='color:#00d4ff'>{row['BB%']:.2f} {"✅" if row['BB%'] < 0.8 else "⚠️"}</td></tr>
+                <tr><td style='color:#607080;padding:3px 0'>Bollinger %</td><td style='color:#00d4ff'>{row['BB%']:.2f} {"✅" if row['BB%']<0.8 else "⚠️"}</td></tr>
                 <tr><td style='color:#607080;padding:3px 0'>ATR%</td><td style='color:#00aaff'>{row['ATR%']:.2f}%</td></tr>
               </table>
             </div>
@@ -628,26 +839,26 @@ if not df_show.empty:
                 )
 
 # ── LEGEND ────────────────────────────────────────────────────────────────────
-with st.expander("📖 Cara Baca Score & Metodologi"):
+with st.expander("📖 Scoring & Metodologi"):
     st.markdown("""
     | Komponen | Max | Keterangan |
     |----------|-----|-----------|
-    | Chg 1D % | 20 | Momentum harian (paling berbobot) |
+    | Chg 1D % | 20 | Momentum harian |
     | Chg 3D % | 10 | Momentum 3 hari |
     | Chg 5D % | 5  | Trend 1 minggu |
     | Volume Surge | 25 | Vol hari ini ÷ avg 20 hari |
-    | RSI 40–65 | 15 | Running zone, belum overbought |
+    | RSI 40–65 | 15 | Running zone |
     | MACD bullish | 15 | Cross + histogram positif |
     | EMA Alignment | 10 | Di atas EMA20 + EMA50 |
-    | Bollinger < 0.8 | 5 | Masih ada ruang naik |
+    | Bollinger < 0.8 | 5 | Ada ruang naik |
 
-    **Signal**: 🔥 STRONG BUY (≥70 + vol≥2x) · ⚡ BUY (≥55) · 👀 WATCH (≥40) · ❄ SKIP
+    **Signal**: 🔥 ≥70+vol≥2x · ⚡ ≥55 · 👀 ≥40 · ❄ <40
 
     > ⚠️ Bukan financial advice. Selalu pakai manajemen risiko.
     """)
 
 st.markdown("""
 <div style='text-align:center;color:#304050;font-size:10px;margin-top:20px'>
-IDX RUNNING TRADE SCANNER v2.0 | Auto-scan on open | yFinance data (delayed)
+IDX RUNNING TRADE SCANNER v3.0 | Auto-scan | Telegram Notify | yFinance data
 </div>
 """, unsafe_allow_html=True)
