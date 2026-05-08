@@ -690,9 +690,9 @@ else:
 
     styled = (
         df_show.style
-        .applymap(c_chg,   subset=["Chg 1D %", "Chg 3D %", "Chg 5D %"])
-        .applymap(c_score, subset=["Score"])
-        .applymap(c_vol,   subset=["Vol Ratio"])
+        .map(c_chg,   subset=["Chg 1D %", "Chg 3D %", "Chg 5D %"])
+        .map(c_score, subset=["Score"])
+        .map(c_vol,   subset=["Vol Ratio"])
         .format({
             "Price":     "{:,.0f}",
             "Chg 1D %":  "{:+.2f}%",
