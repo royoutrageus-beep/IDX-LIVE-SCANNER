@@ -93,13 +93,18 @@ def fetch_ohlcv(ticker, period, interval):
     except: return None
 
 def fetch_multi_tf(ticker):
-    """Fetch 15m (60d) + 1h (60d) + 1d (1y) in parallel."""
+    """
+    Fetch multi-timeframe in parallel with periods optimized per interval.
+    - 15m: 60d (yFinance max for sub-hourly)
+    - 1h:  730d (~2y) to ensure enough bars even with FX/commodity weekend gaps
+    - 1d:  5y for long-term context
+    """
     res = {}
     with ThreadPoolExecutor(max_workers=3) as ex:
         futures = {
-            ex.submit(fetch_ohlcv, ticker, "60d", "15m"): "15m",
-            ex.submit(fetch_ohlcv, ticker, "60d", "1h"):  "1h",
-            ex.submit(fetch_ohlcv, ticker, "1y",  "1d"):  "1d",
+            ex.submit(fetch_ohlcv, ticker, "60d",  "15m"): "15m",
+            ex.submit(fetch_ohlcv, ticker, "730d", "1h"):  "1h",
+            ex.submit(fetch_ohlcv, ticker, "5y",   "1d"):  "1d",
         }
         for f in as_completed(futures):
             tf = futures[f]
@@ -412,24 +417,37 @@ def analyze_ticker(ticker, primary_tf="15m", T1=120, k=20):
     multi_tf = fetch_multi_tf(ticker)
     df_main = multi_tf.get(primary_tf)
 
-    if df_main is None or len(df_main) < 100:
+    if df_main is None or len(df_main) < 60:
         bars_count = len(df_main) if df_main is not None else 0
-        return {"error": f"Data {primary_tf} kurang ({bars_count} bars). Butuh ≥100 bars."}
+        return {"error": f"Data {primary_tf} kurang ({bars_count} bars). Butuh ≥60 bars. Coba ticker lain atau timeframe lebih besar."}
 
-    features, R_hat, sigma = build_feature_matrix(df_main, T1=T1)
-    if len(features) < 50:
-        return {"error": f"Feature matrix terlalu pendek ({len(features)} valid bars). Coba kurangi T1 atau ganti timeframe."}
+    # Auto-adjust T1 jika data terbatas — jangan crash, beradaptasi
+    # Rule of thumb: T1 ≤ len(df)/4 supaya cukup warm-up + valid features
+    auto_T1 = min(T1, max(20, len(df_main) // 4))
+    if auto_T1 < T1:
+        T1_used = auto_T1
+        t1_note = f" (auto-adjusted from {T1} due to limited data)"
+    else:
+        T1_used = T1
+        t1_note = ""
+
+    features, R_hat, sigma = build_feature_matrix(df_main, T1=T1_used)
+    if len(features) < 30:
+        return {"error": f"Feature matrix terlalu pendek ({len(features)} valid bars). Coba T1 lebih kecil atau timeframe berbeda."}
+
+    # Auto-adjust k jika KNN data terbatas
+    k_used = min(k, max(5, len(features) // 4))
 
     breakdown = compute_confluence_score(features, R_hat)
     composite_score, score_conf = aggregate_confluence(breakdown)
 
     # KNN multi-horizon: 15m (1 bar), 1h (4 bars), 4h (16 bars)
     knn_15m_pred, knn_15m_idx, knn_15m_dist, knn_15m_out, knn_15m_conf = \
-        knn_pattern_match(features, df_main["Close"], k=k, lookback_horizon=1)
+        knn_pattern_match(features, df_main["Close"], k=k_used, lookback_horizon=1)
     knn_1h_pred, knn_1h_idx, knn_1h_dist, knn_1h_out, knn_1h_conf = \
-        knn_pattern_match(features, df_main["Close"], k=k, lookback_horizon=4)
+        knn_pattern_match(features, df_main["Close"], k=k_used, lookback_horizon=4)
     knn_4h_pred, _, _, _, knn_4h_conf = \
-        knn_pattern_match(features, df_main["Close"], k=k, lookback_horizon=16)
+        knn_pattern_match(features, df_main["Close"], k=k_used, lookback_horizon=16)
 
     prob_15m, conf_15m = score_to_probability(composite_score, score_conf, knn_15m_pred, knn_15m_conf, scale=35)
     prob_1h,  conf_1h  = score_to_probability(composite_score, score_conf, knn_1h_pred,  knn_1h_conf, scale=40)
@@ -471,6 +489,7 @@ def analyze_ticker(ticker, primary_tf="15m", T1=120, k=20):
         "knn_1h_pred": knn_1h_pred, "knn_1h_conf": knn_1h_conf,
         "entry_levels": entry_levels,
         "df_main": df_main, "n_bars": len(df_main), "n_features": len(features),
+        "T1_used": T1_used, "k_used": k_used, "t1_note": t1_note,
     }
 
 # ════════════════════════════════════════════════════════════════════
@@ -691,7 +710,7 @@ else:
                     </span>
                 </div>
                 <div style="font-size:11px; color:#8b95a8; margin-top:6px;">
-                    {result['n_bars']} bars · ATR(14): ${_pf(result['atr'])} · {result['n_features']} valid features
+                    {result['n_bars']} bars · ATR(14): ${_pf(result['atr'])} · {result['n_features']} valid features · T1={result.get('T1_used',120)}{result.get('t1_note','')} · k={result.get('k_used',20)}
                 </div>
             </div>
             <div style="text-align:right;">
@@ -832,28 +851,29 @@ else:
             out_sign = "✓" if out > 0 else "✗" if out < 0 else "—"
             try: ts_str = pd.Timestamp(ts).strftime("%Y-%m-%d %H:%M")
             except: ts_str = str(ts)
-            knn_rows += f"""
-            <tr>
-                <td style="color:#8b95a8;">#{i+1}</td>
-                <td style="color:#e2e8f0; font-family:Space Mono,monospace;">{ts_str}</td>
-                <td style="text-align:right;"><span style="color:#4da6ff; font-weight:700;">{sim_pct:.0f}%</span></td>
-                <td style="text-align:right; color:{out_col}; font-weight:700;">{out_pct:+.3f}%</td>
-                <td style="text-align:center; color:{out_col}; font-weight:700;">{out_sign}</td>
-            </tr>
-            """
+            knn_rows += (
+                f'<tr>'
+                f'<td style="color:#8b95a8;">#{i+1}</td>'
+                f'<td style="color:#e2e8f0; font-family:Space Mono,monospace;">{ts_str}</td>'
+                f'<td style="text-align:right;"><span style="color:#4da6ff; font-weight:700;">{sim_pct:.0f}%</span></td>'
+                f'<td style="text-align:right; color:{out_col}; font-weight:700;">{out_pct:+.3f}%</td>'
+                f'<td style="text-align:center; color:{out_col}; font-weight:700;">{out_sign}</td>'
+                f'</tr>'
+            )
 
-    st.markdown(f"""
-    <table class="knn-table">
-        <tr>
-            <th style="width:40px;">#</th>
-            <th>Historical Timestamp</th>
-            <th style="text-align:right; width:80px;">Similarity</th>
-            <th style="text-align:right; width:90px;">Outcome (15m)</th>
-            <th style="text-align:center; width:50px;">Win?</th>
-        </tr>
-        {knn_rows}
-    </table>
-    """, unsafe_allow_html=True)
+    table_html = (
+        '<table class="knn-table">'
+        '<tr>'
+        '<th style="width:40px;">#</th>'
+        '<th>Historical Timestamp</th>'
+        '<th style="text-align:right; width:80px;">Similarity</th>'
+        '<th style="text-align:right; width:90px;">Outcome (15m)</th>'
+        '<th style="text-align:center; width:50px;">Win?</th>'
+        '</tr>'
+        f'{knn_rows}'
+        '</table>'
+    )
+    st.markdown(table_html, unsafe_allow_html=True)
 
     # ENTRY LEVELS
     if result["entry_levels"]:
