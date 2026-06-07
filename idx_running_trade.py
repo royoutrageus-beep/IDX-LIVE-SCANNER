@@ -127,8 +127,12 @@ TF_CONFIG = {
 }
 
 # ─── SMART PRICE FORMATTER ────────────────────────────────────────
+def _curr(market):
+    """Currency symbol: Rp for IDX (user trades in Rupiah), $ for everything else."""
+    return "Rp" if market == "IDX (Indonesia)" else "$"
+
 def _pf(price):
-    """Smart formatter — uses $ for ALL markets per user pref."""
+    """Smart number formatter (handles wide price range: $0.00001 to $100,000)."""
     try:
         p = float(price)
         if p <= 0: return "0"
@@ -140,6 +144,21 @@ def _pf(price):
         elif p >= 0.0001: return f"{p:.6f}"
         else:             return f"{p:.8f}"
     except: return "0"
+
+def _pf_idx(price):
+    """IDR formatter - integer with thousand separators (saham IDR jarang ada desimal)."""
+    try:
+        p = float(price)
+        if p <= 0: return "0"
+        return f"{p:,.0f}"
+    except: return "0"
+
+def _price(price, market):
+    """Final formatter: 'Rp 8,975' for IDX, '$2,034.50' for others."""
+    sym = _curr(market)
+    if market == "IDX (Indonesia)":
+        return f"{sym} {_pf_idx(price)}"
+    return f"{sym}{_pf(price)}"
 
 def _pct(v, dp=2):
     try: return f"{float(v):+.{dp}f}%"
@@ -389,7 +408,7 @@ def detect_trend_regime(df):
 #  MAIN ANALYZER (driven by TF_CONFIG)
 # ════════════════════════════════════════════════════════════════════
 
-def analyze_ticker(ticker, primary_tf="15m", T1=None, k=20):
+def analyze_ticker(ticker, primary_tf="15m", T1=None, k=20, market="IDX (Indonesia)"):
     """Full analysis pipeline driven by TF_CONFIG."""
     cfg = TF_CONFIG[primary_tf]
     if T1 is None:
@@ -452,6 +471,7 @@ def analyze_ticker(ticker, primary_tf="15m", T1=None, k=20):
 
     return {
         "ticker": ticker, "primary_tf": primary_tf, "tf_label": cfg["label"],
+        "market": market,
         "price": price, "change_pct": change_pct,
         "atr": float(compute_atr(df_main, 14).iloc[-1]) if len(df_main) >= 15 else 0,
         "vol_regime": vol_regime, "vol_color": vol_color,
@@ -480,7 +500,7 @@ def send_telegram(ticker, result):
     body = (
         f"🎯 *MESIN ENTRY ALERT*\n"
         f"{sep}\n"
-        f"📊 *{ticker}* @ `${_pf(result['price'])}` ({_pct(result['change_pct'])})\n"
+        f"📊 *{ticker}* @ `{_price(result['price'], result['market'])}` ({_pct(result['change_pct'])})\n"
         f"🎚 TF: *{result['primary_tf']}* — {result['tf_label']}\n"
         f"⏰ `{now.strftime('%H:%M:%S')} ET` · `{now.strftime('%d %b %Y')}`\n"
         f"{sep}\n"
@@ -502,10 +522,10 @@ def send_telegram(ticker, result):
         body += (
             f"{sep}\n"
             f"💰 *Entry Plan*\n"
-            f"   Entry: `${_pf(e['entry'])}`\n"
-            f"   TP1:   `${_pf(e['tp1'])}` (R:R `{e['rr1']:.1f}`)\n"
-            f"   TP2:   `${_pf(e['tp2'])}` (R:R `{e['rr2']:.1f}`)\n"
-            f"   SL:    `${_pf(e['sl'])}`\n"
+            f"   Entry: `{_price(e['entry'], result['market'])}`\n"
+            f"   TP1:   `{_price(e['tp1'], result['market'])}` (R:R `{e['rr1']:.1f}`)\n"
+            f"   TP2:   `{_price(e['tp2'], result['market'])}` (R:R `{e['rr2']:.1f}`)\n"
+            f"   SL:    `{_price(e['sl'], result['market'])}`\n"
         )
     body += (
         f"{sep}\n"
@@ -616,7 +636,7 @@ if analyze_btn:
         st.error("Ticker tidak boleh kosong bro")
     else:
         with st.spinner(f"Fetching & analyzing {ticker_formatted} on {primary_tf} ({TF_CONFIG[primary_tf]['label']})..."):
-            result = analyze_ticker(ticker_formatted, primary_tf=primary_tf, T1=None, k=k_neighbors)
+            result = analyze_ticker(ticker_formatted, primary_tf=primary_tf, T1=None, k=k_neighbors, market=market)
             st.session_state.last_result = result
             st.session_state.last_ticker = ticker_formatted
             st.session_state.last_scan_time = time.time()
@@ -667,11 +687,11 @@ else:
             <div>
                 <div style="font-size:13px; color:#8b95a8;">CURRENT STATE · TF: <strong style="color:#00ff88">{result['primary_tf']}</strong> ({result['tf_label']})</div>
                 <div style="font-size:24px; font-weight:700; color:#e2e8f0; margin-top:4px;">
-                    {ticker} · ${_pf(price)}
+                    {ticker} · {_price(price, result['market'])}
                     <span style="font-size:14px; color:{chg_col}; font-weight:700; margin-left:8px;">{chg_sym} {abs(change):.2f}%</span>
                 </div>
                 <div style="font-size:11px; color:#8b95a8; margin-top:6px;">
-                    {result['n_bars']} bars · ATR(14): ${_pf(result['atr'])} · {result['n_features']} valid features · T1={result['T1_used']}{result['t1_note']} · k={result['k_used']}
+                    {result['n_bars']} bars · ATR(14): {_price(result['atr'], result['market'])} · {result['n_features']} valid features · T1={result['T1_used']}{result['t1_note']} · k={result['k_used']}
                 </div>
             </div>
             <div style="text-align:right;">
@@ -697,21 +717,21 @@ else:
         else:
             color = "#ffb700"; bg = "#1a1500"; dir_text = "⚪ WAIT"
         primary_badge = '<div style="font-size:9px; color:#00ff88; font-weight:700; margin-bottom:4px;">▼ PRIMARY ENTRY</div>' if is_primary else ''
-        return f"""
-        <div class="gauge-card" style="background: linear-gradient(135deg, #0d1421, {bg}); border-color: {color}40;">
-            {primary_badge}
-            <div style="font-size:11px; color:#8b95a8; font-weight:700;">{fc['label']} FORECAST</div>
-            <div style="font-size:42px; font-weight:700; color:{color}; margin:12px 0;">{pct:.1f}%</div>
-            <div style="font-size:14px; color:{color}; font-weight:700; margin-bottom:6px;">{dir_text}</div>
-            <div style="font-size:10px; color:#8b95a8;">
-                Confidence: <span style="color:#e2e8f0; font-weight:700;">{cnf:.0f}%</span>
-                · Win: <span style="color:#e2e8f0; font-weight:700;">{fc['winrate']*100:.0f}%</span>
-            </div>
-            <div style="margin-top:12px; height:6px; background:#1a2030; border-radius:3px; overflow:hidden;">
-                <div style="height:100%; width:{pct}%; background:{color};"></div>
-            </div>
-        </div>
-        """
+        return (
+            f'<div class="gauge-card" style="background: linear-gradient(135deg, #0d1421, {bg}); border-color: {color}40;">'
+            f'{primary_badge}'
+            f'<div style="font-size:11px; color:#8b95a8; font-weight:700;">{fc["label"]} FORECAST</div>'
+            f'<div style="font-size:42px; font-weight:700; color:{color}; margin:12px 0;">{pct:.1f}%</div>'
+            f'<div style="font-size:14px; color:{color}; font-weight:700; margin-bottom:6px;">{dir_text}</div>'
+            f'<div style="font-size:10px; color:#8b95a8;">'
+            f'Confidence: <span style="color:#e2e8f0; font-weight:700;">{cnf:.0f}%</span>'
+            f' · Win: <span style="color:#e2e8f0; font-weight:700;">{fc["winrate"]*100:.0f}%</span>'
+            f'</div>'
+            f'<div style="margin-top:12px; height:6px; background:#1a2030; border-radius:3px; overflow:hidden;">'
+            f'<div style="height:100%; width:{pct}%; background:{color};"></div>'
+            f'</div>'
+            f'</div>'
+        )
 
     for i, (col, fc) in enumerate(zip(cols, forecasts)):
         with col:
@@ -762,18 +782,19 @@ else:
             rsi_col = "#00ff88" if rsi_v < 0.3 else "#ff3d5a" if rsi_v > 0.7 else "#8b95a8"
             ema_dir = "↗" if b["ema_raw"] > 0 else "↘"
             ema_col = "#00ff88" if b["ema_raw"] > 0 else "#ff3d5a"
-            st.markdown(f"""
-            <div style="background:#0d1421; border:1px solid #1c2533; border-radius:4px; padding:8px 12px; margin-bottom:6px;">
-                <div style="display:flex; justify-content:space-between; font-size:11px;">
-                    <span style="color:#e2e8f0; font-weight:700;">{b['label']}</span>
-                    <span style="color:{ema_col}; font-weight:700;">{ema_dir} EMA: {b['ema_raw']:+.3f}</span>
-                </div>
-                <div style="display:flex; justify-content:space-between; font-size:10px; color:#8b95a8; margin-top:3px;">
-                    <span>Mom: {b['momentum']:+.0f} · Trend: {b['trend']:+.0f}</span>
-                    <span style="color:{rsi_col};">RSI z: {rsi_v:.2f} {rsi_label}</span>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(
+                f'<div style="background:#0d1421; border:1px solid #1c2533; border-radius:4px; padding:8px 12px; margin-bottom:6px;">'
+                f'<div style="display:flex; justify-content:space-between; font-size:11px;">'
+                f'<span style="color:#e2e8f0; font-weight:700;">{b["label"]}</span>'
+                f'<span style="color:{ema_col}; font-weight:700;">{ema_dir} EMA: {b["ema_raw"]:+.3f}</span>'
+                f'</div>'
+                f'<div style="display:flex; justify-content:space-between; font-size:10px; color:#8b95a8; margin-top:3px;">'
+                f'<span>Mom: {b["momentum"]:+.0f} · Trend: {b["trend"]:+.0f}</span>'
+                f'<span style="color:{rsi_col};">RSI z: {rsi_v:.2f} {rsi_label}</span>'
+                f'</div>'
+                f'</div>',
+                unsafe_allow_html=True
+            )
 
     # KNN MATCHES — uses PRIMARY forecast (shortest horizon)
     primary = result["forecasts"][0]
@@ -835,13 +856,13 @@ else:
         <div class="{css_class}">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
                 <div style="font-size:16px; font-weight:700; color:{dir_color};">{dir_emoji} {e['direction']} · {primary['label']} horizon</div>
-                <div style="font-size:11px; color:#8b95a8;">ATR(14) = ${_pf(e['atr'])} · TP2 adaptif by probability</div>
+                <div style="font-size:11px; color:#8b95a8;">ATR(14) = {_price(e['atr'], result['market'])} · TP2 adaptif by probability</div>
             </div>
             <div style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:12px;">
-                <div><div style="font-size:10px; color:#8b95a8;">ENTRY</div><div style="font-size:18px; font-weight:700; color:#e2e8f0;">${_pf(e['entry'])}</div></div>
-                <div><div style="font-size:10px; color:#00ff88;">TP1 (1.0× ATR)</div><div style="font-size:18px; font-weight:700; color:#00ff88;">${_pf(e['tp1'])}</div><div style="font-size:10px; color:#8b95a8;">R:R {e['rr1']:.2f}</div></div>
-                <div><div style="font-size:10px; color:#00ff88;">TP2 (adaptif)</div><div style="font-size:18px; font-weight:700; color:#00ff88;">${_pf(e['tp2'])}</div><div style="font-size:10px; color:#8b95a8;">R:R {e['rr2']:.2f}</div></div>
-                <div><div style="font-size:10px; color:#ff3d5a;">SL (1.0× ATR)</div><div style="font-size:18px; font-weight:700; color:#ff3d5a;">${_pf(e['sl'])}</div></div>
+                <div><div style="font-size:10px; color:#8b95a8;">ENTRY</div><div style="font-size:18px; font-weight:700; color:#e2e8f0;">{_price(e['entry'], result['market'])}</div></div>
+                <div><div style="font-size:10px; color:#00ff88;">TP1 (1.0× ATR)</div><div style="font-size:18px; font-weight:700; color:#00ff88;">{_price(e['tp1'], result['market'])}</div><div style="font-size:10px; color:#8b95a8;">R:R {e['rr1']:.2f}</div></div>
+                <div><div style="font-size:10px; color:#00ff88;">TP2 (adaptif)</div><div style="font-size:18px; font-weight:700; color:#00ff88;">{_price(e['tp2'], result['market'])}</div><div style="font-size:10px; color:#8b95a8;">R:R {e['rr2']:.2f}</div></div>
+                <div><div style="font-size:10px; color:#ff3d5a;">SL (1.0× ATR)</div><div style="font-size:18px; font-weight:700; color:#ff3d5a;">{_price(e['sl'], result['market'])}</div></div>
             </div>
         </div>
         """, unsafe_allow_html=True)
