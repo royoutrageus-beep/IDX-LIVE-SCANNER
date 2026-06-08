@@ -57,6 +57,20 @@ def format_ticker(raw_ticker, market):
     # If user already typed full yFinance format (with suffix), keep it
     has_suffix = any(s in t for s in [".JK", "-USD", "=X", "=F", "^"])
     if has_suffix: return t
+
+    # Smart suffix logic per market
+    if market == "Commodity":
+        # XAUUSD/XAGUSD/etc (6-letter ending in currency code) → spot pair → =X
+        currency_endings = ("USD","EUR","JPY","GBP","CHF","AUD","CAD","CNY","SGD","HKD")
+        if len(t) >= 5 and t.endswith(currency_endings):
+            return f"{t}=X"
+        # Strictly 2-letter alpha = common futures code (GC, SI, CL, HG, NG, ES, NQ, ZC, ZS, etc.)
+        # 3+ letters left alone: avoid catching ETFs (GLD, IAU, USO, SLV, DBA, USL...)
+        if len(t) == 2 and t.isalpha():
+            return f"{t}=F"
+        # Else = ETF, stock-like, or full yFinance format → no suffix
+        return t
+
     suffix = MARKET_SUFFIX.get(market, "")
     return f"{t}{suffix}" if suffix else t
 
@@ -607,7 +621,7 @@ with col_t:
 with col_m:
     market = st.selectbox("Market",
         list(MARKET_SUFFIX.keys()), index=0,
-        help="Auto-append suffix: IDX → .JK, Crypto → -USD, FX → =X")
+        help="Auto-append suffix:\n• IDX → .JK\n• Crypto → -USD\n• FX → =X\n• Commodity: smart (XAUUSD→=X spot, GC→=F futures, GLD→ETF as-is)")
 with col_tf:
     tf_options = list(TF_CONFIG.keys())
     tf_display = [f"{tf} — {TF_CONFIG[tf]['label']}" for tf in tf_options]
