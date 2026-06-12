@@ -1389,7 +1389,7 @@ def render_market_scan_tab(market_key):
     market_name = mcfg["name"]
     cur_fn = mcfg["currency_fn"]
     unit = "saham" if market_key in ("IDX", "US") else "coins"
-    st.markdown("""
+    st.markdown(f"""
     <div style="background: linear-gradient(135deg,#1a0d2e,#0d1421); border:1px solid #4a1c7a; border-radius:8px; padding:14px 18px; margin-bottom:14px;">
         <div style="font-size:16px; font-weight:700; color:#bf5fff;">{flag} {market_name} Multi-Scan — {n_total} {unit}</div>
         <div style="font-size:11px; color:#8b95a8; margin-top:4px;">
@@ -1434,17 +1434,22 @@ def render_market_scan_tab(market_key):
 
     # Multi-TF Coverage selector (only relevant in multi-TF mode)
     if is_multi_tf:
+        # Build option labels with actual market values
+        opt_100 = "⚡ Top 100 (~2 menit)"
+        opt_300 = "📊 Top 300 (~5 menit)"
+        opt_500 = "🔥 Top 500 (~8 menit)"
+        opt_all = f"💎 ALL {n_total} {unit} (~15 menit)"
         cov_label = st.radio(
             "Stage 2 Coverage — berapa kandidat dari Stage 1 yang di-deep-dive multi-TF",
-            ["⚡ Top 100 (~2 menit)", "📊 Top 300 (~5 menit)", "🔥 Top 500 (~8 menit)", "💎 ALL {n_total} {unit} (~15 menit)"],
+            [opt_100, opt_300, opt_500, opt_all],
             index=0, horizontal=True, key=f"{market_key}_coverage",
-            help="Stage 1 selalu scan semua 981. Stage 2 (multi-TF) cuma deep-dive top N kandidat dari Stage 1. Lebih banyak = lebih komprehensif tapi lebih lama."
+            help=f"Stage 1 selalu scan semua {n_total}. Stage 2 (multi-TF) cuma deep-dive top N kandidat dari Stage 1. Lebih banyak = lebih komprehensif tapi lebih lama."
         )
         coverage_map = {
-            "⚡ Top 100 (~2 menit)": 100,
-            "📊 Top 300 (~5 menit)": 300,
-            "🔥 Top 500 (~8 menit)": 500,
-            "💎 ALL {n_total} {unit} (~15 menit)": 981,
+            opt_100: 100,
+            opt_300: 300,
+            opt_500: 500,
+            opt_all: n_total,
         }
         sc_coverage_n = coverage_map[cov_label]
     else:
