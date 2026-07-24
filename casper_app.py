@@ -1,10 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-CASPER IDX — MESIN HIJAU (UI Streamlit)
-=======================================
+CASPER IDX — MESIN HIJAU (UI Streamlit) — v2: Auto-Scan-on-Open + Auto-Mode
+============================================================================
 Jalankan:  streamlit run casper_app.py
 Butuh:     pip install streamlit yfinance pandas numpy
 File lain: casper_engine.py + .streamlit/config.toml (satu folder)
+
+PATCH dari versi lama (persis pola Mesin Presisi):
+  * Auto-scan LANGSUNG jalan begitu browser dibuka — nggak perlu klik
+    "MULAI SCAN SEKARANG" dulu. Abis itu baru looping sendiri tiap
+    interval yang dipilih (15/30/60 menit), selama tab browser kebuka.
+  * Mode sinyal (Scalping/Momentum/Intraday/Swing/Bagger) sekarang bisa
+    AUTO — ikut regime IHSG (ce.get_market_regime()) — atau tetap bisa
+    di-override manual lewat sidebar.
 """
 
 import os
@@ -68,6 +76,9 @@ h1,h2,h3 { color:#e7f5e1 !important; letter-spacing:.5px; }
 .stButton>button { background:#A3E635 !important; color:#0a0f0a !important;
   font-weight:800 !important; border:0 !important; }
 .stButton>button:hover { box-shadow:0 0 16px rgba(163,230,53,.5); }
+.regime-box { border:1px solid #35521f44; border-left:4px solid #A3E635;
+  border-radius:8px; padding:10px 14px; margin-bottom:10px;
+  background:rgba(0,0,0,.25); font-size:11px; color:#cfe8bf; }
 </style>"""
 st.markdown(CSS, unsafe_allow_html=True)
 
@@ -89,16 +100,32 @@ with st.sidebar:
     custom = st.text_area("Ticker custom (tanpa .JK juga boleh)",
                           "BBCA BBRI TLKM",
                           disabled=universe != "Custom")
-    mode = st.selectbox("Mode sinyal",
-                        ["Scalping", "Momentum", "Intraday", "Swing",
-                         "Bagger"])
+
+    st.markdown("### 🎯 MODE SINYAL")
+    auto_mode_on = st.toggle("🤖 Auto-Mode (ikuti regime IHSG)", value=True,
+                             key="auto_mode_on")
+    if auto_mode_on:
+        _reg_mode, _reg_price, _reg_e20, _reg_e55, _reg_label = ce.get_market_regime()
+        mode = _reg_mode
+        st.markdown(f'<div class="regime-box">🎯 Auto: <b>{mode}</b> '
+                    f'{ce.MODES.get(mode, {}).get("emoji", "")}<br>{_reg_label}'
+                    f'</div>', unsafe_allow_html=True)
+    else:
+        mode = st.selectbox("Mode sinyal (manual)",
+                            ["Scalping", "Momentum", "Intraday", "Swing",
+                             "Bagger"],
+                            format_func=lambda m: f"{m} {ce.MODES[m]['emoji']}")
+
     min_to = st.number_input("Min turnover/hari (juta Rp)",
                              min_value=0, value=500, step=100)
     hanya_buy = st.toggle("Hanya tampilkan BUY", value=False)
-    tombol_scan = st.button("🚀 MULAI SCAN SEKARANG", use_container_width=True)
+    tombol_scan = st.button("🚀 SCAN MANUAL SEKARANG", use_container_width=True)
     st.divider()
     st.markdown("### 🔄 AUTO-SCAN")
-    auto_on = st.toggle("Auto-Scan berkala", value=False)
+    st.caption("Begitu browser dibuka, Casper langsung scan sendiri — "
+              "gak perlu klik apa-apa. Abis itu dia looping otomatis "
+              "sesuai interval di bawah, selama tab ini kebuka.")
+    auto_on = st.toggle("Auto-Scan aktif", value=True, key="auto_on")
     interval = st.selectbox("Interval Auto-Scan",
                             ["15 menit", "30 menit", "60 menit"],
                             disabled=not auto_on)
@@ -114,14 +141,29 @@ with st.sidebar:
                             disabled="hasil" not in st.session_state)
 
 # ------------------------------- SCAN -----------------------------------
-if tombol_scan:
+_menit = int(interval.split()[0])
+
+# Auto-trigger: begitu browser dibuka (belum pernah ada hasil scan di
+# session ini) ATAU interval sudah lewat -> scan otomatis, TANPA nunggu
+# klik tombol. Persis pola heartbeat Mesin Presisi.
+auto_trigger = False
+if auto_on:
+    if "last_scan" not in st.session_state:
+        auto_trigger = True                              # baru buka browser
+    else:
+        _elapsed = (ce.now_wib() - st.session_state["last_scan"]).total_seconds()
+        if _elapsed >= _menit * 60 - 10:
+            auto_trigger = True                           # interval lewat
+
+if tombol_scan or auto_trigger:
     demo = sumber.startswith("Demo")
     tickers, semua = None, False
     if universe == "Custom":
         tickers = custom.split()
     elif universe.startswith("Semua"):
         semua = True
-    with st.spinner("👻 Casper lagi mindai pasar... (Semua IDX ± 10-20 mnt)"):
+    with st.spinner(f"👻 Casper lagi mindai pasar (mode {mode})... "
+                    f"(Semua IDX ± 10-20 mnt)"):
         df = ce.scan(tickers=tickers, demo=demo, semua=semua,
                      mode=mode, min_turnover_jt=min_to)
         ce.catat_jurnal(df)
@@ -129,9 +171,11 @@ if tombol_scan:
     st.session_state["hasil"], st.session_state["eval"] = df, ev
     st.session_state["cfg"] = {"tickers": tickers, "demo": demo,
                                "semua": semua, "mode": mode,
-                               "min_turnover_jt": min_to}
+                               "min_turnover_jt": min_to,
+                               "auto_mode_on": auto_mode_on}
     st.session_state["last_scan"] = ce.now_wib()
-    st.success(f"✅ {len(df)} saham lolos filter — otomatis ke-log di Journal.")
+    st.success(f"✅ {len(df)} saham lolos filter (mode {mode}) — "
+              f"otomatis ke-log di Journal.")
     if auto_tele:
         if ce.kirim_tele(df):
             st.success("🚀 Hasil scan langsung terkirim ke Telegram!")
@@ -146,8 +190,6 @@ if tombol_tele and "hasil" in st.session_state:
         st.toast("❌ Gagal — cek kredensial Telegram")
 
 # --------------------------- AUTO-SCAN BERKALA ---------------------------
-_menit = int(interval.split()[0])
-
 @st.fragment(run_every=_menit * 60
              if (auto_on and "cfg" in st.session_state) else None)
 def auto_scan():
@@ -158,11 +200,17 @@ def auto_scan():
     if last is not None and \
        (ce.now_wib() - last).total_seconds() < _menit * 60 - 10:
         return                      # belum waktunya, tunggu jadwal
-    df = ce.scan(**ss["cfg"])
+    cfg = dict(ss["cfg"])
+    if cfg.get("auto_mode_on"):
+        # regime bisa berubah antar siklus -> re-evaluasi tiap kali,
+        # bukan kepakai mode lama terus-terusan
+        cfg["mode"], *_ = ce.get_market_regime()
+    df = ce.scan(**{k: v for k, v in cfg.items() if k != "auto_mode_on"})
     ce.catat_jurnal(df)
     ss["hasil"] = df
     ss["eval"] = ce.evaluasi_jurnal(ce.LAST_CLOSE)
     ss["last_scan"] = ce.now_wib()
+    ss["cfg"] = cfg
     if auto_tele:
         ce.kirim_tele(df)
     st.rerun(scope="app")
@@ -180,7 +228,7 @@ tab1, tab2, tab3 = st.tabs(["🔥 Scanner", "📓 Journal", "✅ Bukti Statistik
 # ------------------------------ SCANNER ----------------------------------
 with tab1:
     if "hasil" not in st.session_state:
-        st.info("Klik **MULAI SCAN SEKARANG** di sidebar.")
+        st.info("👻 Menunggu scan pertama jalan otomatis...")
     else:
         df = st.session_state["hasil"]
         tampil = df[df["iq_verdict"] == "BUY"] if hanya_buy else df
@@ -268,6 +316,12 @@ with tab1:
 `signal` GACOR ≥ 6 · POTENSIAL ≥ 4.5 — `mesin_score` = score/10×60 +
 min(rvol/3,1)×25 + 15×(>VWAP) — `iq_verdict` **BUY jika iq ≥ 65 + trend naik
 + di atas VWAP + RVOL ≥ 1.5** — TP = harga + 1.9×ATR, SL = harga − 1×ATR
+
+**Auto-Mode (regime IHSG):** RALLY (IHSG di atas EMA20 & EMA55, +8%/20 hari)
+→ Bagger 💎 · UPTREND mapan (di atas EMA20 & EMA55) → Swing 🌙 ·
+Recovery/breakout awal (di atas EMA20 doang) → Momentum 🚀 · BEARISH
+(di bawah EMA20 & EMA55, turun) → Scalping ⚡ · SIDEWAYS/netral → Intraday
+🌤️. Bisa dimatiin kapan aja dan pilih mode manual dari sidebar.
 
 **Lapisan risiko kuantitatif:** `vol_regime` = vol EWMA λ0.94 vs rata2 60
 hari (volatility clustering) · `var5_pct` = VaR 5% empiris dari distribusi
